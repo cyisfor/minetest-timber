@@ -14,21 +14,53 @@
 ]]
 
 -- this mod is based on http://minetest.net/forum/viewtopic.php?id=1590
-timber_nodenames={"default:jungletree", "default:papyrus", "default:cactus", "default:tree"}
+local timber = {}
+timber.nodenames={"default:papyrus", "default:cactus", "group:tree"}
+timber.search = 3 -- how far to look for suspended trunks
+timber.limit = 100 -- how many iterations before give up removing suspended
+
+function dig_node(np) 
+   minetest.env:remove_node(np)
+   for _, item in ipairs(minetest.get_node_drops(name)) do
+	  local tp = {x = np.x + math.random()/2 - 0.25, y = np.y, z = np.z + math.random()/2 - 0.25}
+	  minetest.env:add_item(tp, item)
+   end
+end
+
+function dig_air_trees(center, node, count)
+   dig_node(np)
+   count = count + 1
+   while count < timber.limit do
+	  local np = minetest.env:find_node_near(center, timber.search, node)
+	  if np == nil then
+		 break
+	  end
+	  local below = minetest.get_node_or_nil({np.X,np.Y-1,np.Z})
+	  if below ~= nil and
+	  not minetest.registered_nodes[below.name].walkable then
+		 count += dig_air_trees(np, node, count+1)
+	  end
+   end
+   return count
+end
+
+function dig_up(pos, nodes)
+   local height = nil
+   -- check up first, so it doesn't get dug by air trees
+   for height = 1,100 do
+	  local np = {pos.x,pos.y+height,pos.z}
+	  if nil == minetest.env:find_node_near(np,1,nodes) then
+		 break
+	  end
+	  dig_node(np)
+   end
+   for i = 1,height do
+	  local np = {pos.x,pos.y+height,pos.z}
+	  dig_air_trees(np, nodes, 0)
+   end
+end
 
 minetest.register_on_dignode(function(pos, node)
-	for _, name in ipairs(timber_nodenames) do
-		if node.name==name then
-			local np={x=pos.x, y=pos.y+1, z=pos.z}
-			while minetest.env:get_node(np).name==name do
-				minetest.env:remove_node(np)
-				for _, item in ipairs(minetest.get_node_drops(name)) do
-					local tp = {x = np.x + math.random()/2 - 0.25, y = np.y, z = np.z + math.random()/2 - 0.25}
-					minetest.env:add_item(tp, item)
-				end
-				np={x=np.x, y=np.y+1, z=np.z}
-			end
-			break
-		end
-	end
+	  dig_up(pos,timber.nodenames)
 end)
+

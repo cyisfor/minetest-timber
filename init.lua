@@ -20,13 +20,21 @@ function set(list)
 end
 
 -- this mod is based on http://minetest.net/forum/viewtopic.php?id=1590
-local timber = {}
+local timber = {
+   search = 6,
+   -- how far to look for suspended trunks
+   limit = 100,
+   -- how many iterations before give up removing suspended   
+   wait = 10,
+   -- how many iterations before trampolining off a timer
+   start = 3
+   -- how far up to go before searching around
+}
+
 timber.nodes = set {"default:papyrus", "default:cactus"}
 timber.groups = {
    tree=true
 }
-timber.search = 3 -- how far to look for suspended trunks
-timber.limit = 100 -- how many iterations before give up removing suspended
 
 function timber.dig_node(np,node) 
    core.remove_node(np)
@@ -36,43 +44,68 @@ function timber.dig_node(np,node)
    end
 end
 
-function timber.dig_around(center, node, count)
-   count = count + 1
-   if count > timber.limit then return count end
-   local downleft = {x=center.x-timber.search,
-					 y=center.y,
-					 z=center.z-timber.search}
-   local topright = {x=center.x+timber.search,
-					 y=center.y,
-					 z=center.z+timber.search}
-   -- NOT below center.y though.
-   local nps = core.find_nodes_in_area(downleft, topright, node.name)
-   for _,np in ipairs(nps) do
-	  local below = minetest.get_node_or_nil({x=np.x,y=np.y-1,z=np.z})	  
-	  if below ~= nil then
-		 print('below',np.x,np.y,np.z,below.name)
-		 local ndef = minetest.registered_nodes[below.name]
-		 if not ndef.walkable or ndef.group.leaves then
-			timber.dig_node(np,node)
-			count = count + 1
-			if count > timber.limit then return count end
-			count = timber.dig_around(np, node, count)
-			if count > timber.limit then return count end
-		 end
-	  else
-		 print('below is nil',np.x,np.y,np.z)
-	  end
+local function counter()
+   return {
+	  full = 0,
+	  current = 0
+   }
+end
+
+local function maybe_count(count,finally,continue)
+   if count.full > timber.limit then finally(count) end
+   if count.current > timber.wait_threshold then
+	  core.after(timber.delay,continue,count)
+   else
+	  continue(count)
    end
-   print('derp2')
-   return count
+
+
+function timber.dig_around(center, node, count, finally)
+   maybe_count
+   (count + 1, finally,
+	function(count)
+	   local downright = {x=center.x-timber.search,
+						 y=center.y,
+						 z=center.z-timber.search}
+	   -- NOT below center.y though.
+	   local topleft = {x=center.x+timber.search,
+						 y=center.y+timber.search,
+						 z=center.z+timber.search}
+	   local nps = core.find_nodes_in_area(downright, topleft, node.name)
+	   local function one_iteration(i,count)
+		  if i > #nps then
+			 -- a second finally?
+			 -- "finished"?
+			 -- when count hasn't overflown, but no more nearby nodes,
+			 -- so can go to the next guy?
+			 return finally(count)
+		  end
+		  local np = nps[i]
+		  local below = minetest.get_node_or_nil({x=np.x,
+												  y=np.y-1,
+												  z=np.z})	  
+		  if below ~= nil then
+			 local ndef = minetest.registered_nodes[below.name]
+			 if not ndef.walkable or ndef.groups.leaves then
+				timber.dig_node(np,node)
+				maybe_count
+				(count+1, finally,
+				 function(count)
+					timber.dig_around
+					(np, node, count,
+					 function(count)
+						one_iteration(i+1, count)
+					 end)
+				 end)
+			 end
+		  end
+	   end
+   end)
 end
 
 function timber.want_this(node)
    if timber.nodes[node.name] then return node end
-   print("ummm",core.registered_nodes[node.name].groups)
-
    for group,_ in pairs(core.registered_nodes[node.name].groups) do
-	  print("group",group)
 	  if timber.groups[group] then return node end
    end
    return nil
@@ -92,9 +125,9 @@ function timber.dig_above(pos, node, count)
 	  timber.dig_node(np,node)
    end
    print('above',height)
-   for i = 3,height do
-	  local np = {x=pos.x,y=pos.y+height,z=pos.z}
-	  timber.dig_around(np, node, 0)
+   for i = timber.start,height do
+	  local np = {x=pos.x,y=pos.y+i,z=pos.z}
+	  print("count",timber.dig_around(np, node, 0))
    end
 end
 

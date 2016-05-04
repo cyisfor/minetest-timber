@@ -22,7 +22,9 @@ end
 -- this mod is based on http://minetest.net/forum/viewtopic.php?id=1590
 local timber = {}
 timber.nodes = set {"default:papyrus", "default:cactus"}
-timber.groups = {"tree"}
+timber.groups = {
+   tree=true
+}
 timber.search = 3 -- how far to look for suspended trunks
 timber.limit = 100 -- how many iterations before give up removing suspended
 
@@ -36,19 +38,32 @@ end
 
 function timber.dig_around(center, node, count)
    count = count + 1
-   while count < timber.limit do
-	  local np = core.find_node_near(center, timber.search, node.name)
-	  if np == nil then 
-		 break
-	  end
-	  if np.y >= node.y then
-		 local below = minetest.get_node_or_nil({np.X,np.Y-1,np.Z})
-		 if below ~= nil and
-		 not minetest.registered_nodes[below.name].walkable then
-			count = count + dig_around(np, node, count+1)
+   if count > timber.limit then return count end
+   local downleft = {x=center.x-timber.search,
+					 y=center.y,
+					 z=center.z-timber.search}
+   local topright = {x=center.x+timber.search,
+					 y=center.y,
+					 z=center.z+timber.search}
+   -- NOT below center.y though.
+   local nps = core.find_nodes_in_area(downleft, topright, node.name)
+   for _,np in ipairs(nps) do
+	  local below = minetest.get_node_or_nil({x=np.x,y=np.y-1,z=np.z})	  
+	  if below ~= nil then
+		 print('below',np.x,np.y,np.z,below.name)
+		 local ndef = minetest.registered_nodes[below.name]
+		 if not ndef.walkable or ndef.group.leaves then
+			timber.dig_node(np,node)
+			count = count + 1
+			if count > timber.limit then return count end
+			count = timber.dig_around(np, node, count)
+			if count > timber.limit then return count end
 		 end
+	  else
+		 print('below is nil',np.x,np.y,np.z)
 	  end
    end
+   print('derp2')
    return count
 end
 
@@ -74,10 +89,10 @@ function timber.dig_above(pos, node, count)
 	  local test = core.get_node_or_nil(np)
 	  if test == nil then break end
 	  if node.name ~= test.name then break end
-	  timber.dig_node(np,node,height+count)
+	  timber.dig_node(np,node)
    end
    print('above',height)
-   for i = 1,height do
+   for i = 3,height do
 	  local np = {x=pos.x,y=pos.y+height,z=pos.z}
 	  timber.dig_around(np, node, 0)
    end

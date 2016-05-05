@@ -61,8 +61,7 @@ local function maybe_count(count,finally,continue)
 
 
 function timber.dig_around(center, node, count, finally)
-   maybe_count
-   (count + 1, finally,
+   maybe_count(count + 1, finally,
 	function(count)
 	   local downright = {x=center.x-timber.search,
 						 y=center.y,

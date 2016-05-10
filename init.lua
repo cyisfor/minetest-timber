@@ -57,7 +57,7 @@ local currently_digging = 0
 
 local function maybe_count(count,finally,continue)
    if count.full > timber.limit then
-	  finally(count)
+	  finally()
 	  return
    end
    count.full = count.full + 1
@@ -66,18 +66,18 @@ local function maybe_count(count,finally,continue)
 	  core.after(timber.delay,function()
 					print('derp resume')
 					currently_digging = 0
-					continue(count)
+					continue()
 	  end)
    else
 	  currently_digging = currently_digging + 1
-	  continue(count)
+	  continue()
    end
 end
 
 
 function timber.dig_around(center, node, count, finally, continue)
    maybe_count(count, finally,
-	function(count)
+	function()
 	   local downright = {x=center.x-timber.search,
 						 y=center.y-1,
 						 z=center.z-timber.search}
@@ -86,20 +86,20 @@ function timber.dig_around(center, node, count, finally, continue)
 						 y=center.y+timber.search,
 						 z=center.z+timber.search}
 	   local nps = core.find_nodes_in_area(downright, topleft, node.name)
-	   local function one_iteration(i,count)
+	   local function one_iteration(i)
 		  if i > #nps then
 			 -- we dug all successfully, so can continue on
-			 return continue(count)
+			 return continue()
 		  end
 		  local np = nps[i]
 		  local function doit()
 			 maybe_count(count, finally,
-						 function(count)
+						 function()
 							timber.dig_around(
 							   np, node, count,
 							   finally,
-							   function(count)
-								  one_iteration(i+1, count)
+							   function()
+								  one_iteration(i+1)
 							end)
 			 end)
 		  end
@@ -120,23 +120,23 @@ function timber.dig_around(center, node, count, finally, continue)
 			 end
 		  end
 	   end
-	   local function breadth_first(i,count)
+	   local function breadth_first(i)
 		  if i > #nps then
-			 return one_iteration(1,count)
+			 return one_iteration(1)
 		  end
 		  timber.just_dig_above(nps[i],
 								node,
 								count,
 								finally,
-						   function(count)
+						   function()
 							  maybe_count(count, finally,
-										  function(count)
+										  function()
 											 breadth_first(i+1,count)
 							  end)
 						   end)
 	   end
 						 
-	   breadth_first(1,count)
+	   breadth_first(1)
    end)
 end
 
@@ -152,49 +152,49 @@ end
 function timber.just_dig_above(pos, node, count, finally, continue)
    local height = nil
    -- check up first, so it doesn't get dug by air trees
-   local function iterate(height,count)
+   local function iterate(height)
 	  if height == 100 then
 		 return continue(height)
 	  end
-	  local np = {x=pos.x,y=pos.y+height,z=pos.z}
-	  local test = core.get_node_or_nil(np)
-	  if test == nil then return continue(height) end
-	  if node.name ~= test.name then return continue(height) end
-	  timber.dig_node(np,node)
-	  maybe_count(count,finally,function(count)
-					 iterate(height+1,count)
+	  maybe_count(count,finally,function()
+					 local np = {x=pos.x,y=pos.y+height,z=pos.z}
+					 local test = core.get_node_or_nil(np)
+					 if test == nil then return continue(height) end
+					 if node.name ~= test.name then
+						return continue(height)
+					 end
+					 timber.dig_node(np,node)					 
+					 iterate(height+1)
 	  end)
    end
-   maybe_count(count,finally,function(count)
-				  iterate(0,count)
-							 end)
+   iterate(0)
    return height
 end
 
 function timber.dig_above(pos, node, finally)
    local count = counter()
    local function have_height(height)
-	  local function iterate(i,count)
+	  local function iterate(i)
 		 if i == height then
-			finally(count)
+			finally()
 			return
 		 end
 		 local np = {x=pos.x,y=pos.y+i,z=pos.z}
 		 timber.dig_around(np, node, count,
 						   finally,
-						   function(count)
-							  iterate(i+1,count)
+						   function()
+							  iterate(i+1)
 		 end)
 	  end
 
-	  iterate(timber.start,count)
+	  iterate(timber.start)
    end
    timber.just_dig_above(pos,node,count,finally,have_height)
 end
 
 minetest.register_on_dignode(function(pos,node)
 	  if not timber.want_this(node) then return end
-	  timber.dig_above(pos,node,function(count)
+	  timber.dig_above(pos,node,function()
 						  print("tree derped")
 	  end)
 end)

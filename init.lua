@@ -52,16 +52,25 @@ local function counter()
 end
 
 local function maybe_count(count,finally,continue)
-   if count.full > timber.limit then finally(count) end
+   if count.full > timber.limit then
+	  finally(count)
+	  return
+   end
+   count.full = count.full + 1
    if count.current > timber.wait_threshold then
-	  core.after(timber.delay,continue,count)
+	  core.after(timber.delay,function()
+					count.current = 0
+					continue(count)
+	  end)
    else
+	  count.current = count.current + 1
 	  continue(count)
    end
+end
 
 
 function timber.dig_around(center, node, count, finally)
-   maybe_count(count + 1, finally,
+   maybe_count(count, finally,
 	function(count)
 	   local downright = {x=center.x-timber.search,
 						 y=center.y,
@@ -87,11 +96,9 @@ function timber.dig_around(center, node, count, finally)
 			 local ndef = minetest.registered_nodes[below.name]
 			 if not ndef.walkable or ndef.groups.leaves then
 				timber.dig_node(np,node)
-				maybe_count
-				(count+1, finally,
+				maybe_count(count+1, finally,
 				 function(count)
-					timber.dig_around
-					(np, node, count,
+					timber.dig_around(np, node, count,
 					 function(count)
 						one_iteration(i+1, count)
 					 end)
@@ -111,8 +118,8 @@ function timber.want_this(node)
 end
 
 
-function timber.dig_above(pos, node, count)
-   count = count or 0
+function timber.dig_above(pos, node, count, finally)
+   count = count or counter()
    local height = nil
    -- check up first, so it doesn't get dug by air trees
    for derp = 1,100 do
@@ -124,13 +131,23 @@ function timber.dig_above(pos, node, count)
 	  timber.dig_node(np,node)
    end
    print('above',height)
-   for i = timber.start,height do
+   function iterate(i,count)
+	  if i == height then
+		 finally(count)
+		 return
+	  end
+
 	  local np = {x=pos.x,y=pos.y+i,z=pos.z}
-	  print("count",timber.dig_around(np, node, 0))
+	  timber.dig_around(np, node, count,
+						function(count)
+						   iterate(i+1,count)
+						end)
    end
 end
 
 minetest.register_on_dignode(function(pos,node)
 	  if not timber.want_this(node) then return end
-	  timber.dig_above(pos,node,0)
+	  timber.dig_above(pos,node,function(count)
+						  print("tree derped")
+	  end)
 end)

@@ -24,7 +24,7 @@ local timber = {
    search = 6,
    -- how far to look for suspended trunks
    limit = 1000,
-   -- how many iterations before give up removing suspended   
+   -- how many iterations before give up removing suspended
    wait = 100,
    -- how many iterations before trampolining off a timer
    start = -1,
@@ -38,11 +38,10 @@ timber.groups = {
    tree=true
 }
 
-function timber.dig_node(np,node) 
+function timber.dig_node(np,node)
    core.remove_node(np)
    for _, item in ipairs(minetest.get_node_drops(node.name)) do
-	  local tp = {x = np.x + math.random()/2 - 0.25, y = np.y, z = np.z + math.random()/2 - 0.25}
-	  core.add_item(tp, item)
+	  core.add_item(np, item)
    end
 end
 
@@ -110,7 +109,7 @@ function timber.dig_around(center, node, count, finally, continue)
 		  print("eh?",np,np==nil)
 		  local below = minetest.get_node_or_nil({x=np.x,
 												  y=np.y-1,
-												  z=np.z})	  
+												  z=np.z})
 		  if below == nil then
 			 doit()
 		  else
@@ -135,7 +134,7 @@ function timber.dig_around(center, node, count, finally, continue)
 							  end)
 						   end)
 	   end
-						 
+
 	   breadth_first(1)
    end)
 end
@@ -151,43 +150,51 @@ end
 
 function timber.just_dig_above(pos, node, count, finally, continue)
    local height = nil
-   -- check up first, so it doesn't get dug by air trees
-   local function iterate(height)
-	  if height == 100 then
-		 return continue(height)
+   local function have_height(height)
+	  -- be sure to dig down, avoid floating trees
+	  local function iterate(i)
+		 if i <= 1 then
+			return continue(height)
+		 end
+		 maybe_count(count,finally,function()
+						local np = {x=pos.x,y=pos.y+height,z=pos.z}
+						timber.dig_node(np,node)
+						iterate(i-1)
+		 end)
 	  end
-	  maybe_count(count,finally,function()
-					 local np = {x=pos.x,y=pos.y+height,z=pos.z}
-					 local test = core.get_node_or_nil(np)
-					 if test == nil then return continue(height) end
-					 if node.name ~= test.name then
-						return continue(height)
-					 end
-					 timber.dig_node(np,node)					 
-					 iterate(height+1)
-	  end)
+	  return iterate(height)
    end
-   iterate(0)
-   return height
+   -- check up first, to find what to dig
+   for height = 1..100 do
+	  local np = {x=pos.x,y=pos.y+height,z=pos.z}
+	  local test = core.get_node_or_nil(np)
+	  if test == nil then return have_height(height-1) end
+	  if node.name ~= test.name then
+		 return have_height(height-1)
+	  end
+   end
+   -- even giant sequoias only get up to ~40
+   return have_height(100)
 end
 
 function timber.dig_above(pos, node, finally)
    local count = counter()
    local function have_height(height)
+	  -- be sure to dig down, avoid floating trees
 	  local function iterate(i)
-		 if i == height then
-			finally()
-			return
-		 end
 		 local np = {x=pos.x,y=pos.y+i,z=pos.z}
 		 timber.dig_around(np, node, count,
 						   finally,
 						   function()
-							  iterate(i+1)
+							  iterate(i-1)
 		 end)
+		 if i == timber.start then
+			finally()
+			return
+		 end
 	  end
 
-	  iterate(timber.start)
+	  iterate(height)
    end
    timber.just_dig_above(pos,node,count,finally,have_height)
 end

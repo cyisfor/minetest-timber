@@ -21,18 +21,19 @@ end
 
 -- this mod is based on http://minetest.net/forum/viewtopic.php?id=1590
 local timber = {
-   search = 6,
-   -- how far to look for suspended trunks
-   limit = 1000,
-   -- how many iterations before give up removing suspended
+   search = 1,
+   -- how far to search for suspended trunks
+   limit = 10000,
+   -- how many blocks to remove in one chop before giving up
+   -- TODO: limit by item durability, not global setting
    wait = 100,
-   -- how many iterations before trampolining off a timer
+   -- how many blocks to chop at once
    start = -1,
    -- how far up to go before searching around (0 = current level)
    delay = 1,
    -- how long to wait until felling more trees
    max_height = 50,
-   -- how far up to look for tree blocks
+   -- how far up to follow the trunk before giving up
    -- (giant sequoia never gets above 50 blocks high)
 }
 

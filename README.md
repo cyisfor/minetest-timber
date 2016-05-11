@@ -13,3 +13,4 @@ TODO:
 * use an item to fell trees this way, limit trunks chopped by durability
 * items for specific types of timber: chopping the big main trunk, or trimming the floating tree blocks.
 * AOE leaf destruction?
+* Stop skipping nearby nodes for taller, farther ones (recurse down at 1, then at 2, etc?

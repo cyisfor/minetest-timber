@@ -21,13 +21,12 @@ end
 
 -- this mod is based on http://minetest.net/forum/viewtopic.php?id=1590
 local timber = {
-   search = 1,
+   search = 4,
    -- how far to search for suspended trunks
    limit = 10000,
-   -- how many blocks to remove in one chop before giving up
-   -- TODO: limit by item durability, not global setting
+   -- hard limit to how many blocks to remove in one chop before giving up
    wait = 100,
-   -- how many blocks to chop at once
+   -- how many blocks to chop before waiting
    start = -1,
    -- how far up to go before searching around (0 = current level)
    delay = 1,
@@ -49,8 +48,9 @@ function timber.dig_node(np,node, drop)
    end
 end
 
-local function counter()
+local function counter(durability)
    return {
+	  left = durability,
 	  full = 0,
 	  current = 0
    }
@@ -58,13 +58,18 @@ end
 
 local currently_digging = 0
 
-local function maybe_count(count,finally,continue)
+local function maybe_count(count,finally,on_wait,continue)
+	 if count.left <= 0 then
+			return finally()
+	 end
+	 count.left = count.left - 1
    if count.full > timber.limit then
 	  return finally()
    end
    count.full = count.full + 1
    if currently_digging > timber.wait then
 	  print('derp',currently_digging)
+		on_wait()
 	  core.after(timber.delay,function()
 					print('derp resume')
 					currently_digging = 0
@@ -77,8 +82,8 @@ local function maybe_count(count,finally,continue)
 end
 
 
-function timber.dig_around(center, node, drop, count, finally, continue)
-   maybe_count(count, finally,
+function timber.dig_around(center, node, drop, count, finally, on_wait, continue)
+   maybe_count(count, finally, on_wait,
 	function()
 	   local downright = {x=center.x-timber.search,
 						 y=center.y,
@@ -97,11 +102,12 @@ function timber.dig_around(center, node, drop, count, finally, continue)
 		  end
 		  local np = nps[i]
 		  local function doit()
-			 maybe_count(count, finally,
+			 maybe_count(count, finally, on_wait, 
 						 function()
 							timber.dig_around(
 							   np, node, drop, count,
 							   finally,
+								 on_wait,
 							   function()
 								  one_iteration(i+1)
 							end)
@@ -133,8 +139,9 @@ function timber.dig_around(center, node, drop, count, finally, continue)
 								drop,
 								count,
 								finally,
+								on_wait,
 						   function()
-							  maybe_count(count, finally,
+							  maybe_count(count, finally, on_wait, 
 										  function()
 											 breadth_first(i+1,count)
 							  end)
@@ -147,14 +154,17 @@ end
 
 function timber.want_this(node)
    if timber.nodes[node.name] then return node end
-   for group,_ in pairs(core.registered_nodes[node.name].groups) do
-	  if timber.groups[group] then return node end
-   end
+	 if not core.registered_nodes[node.name] then
+			return nil
+	 end
+	 for group,_ in pairs(core.registered_nodes[node.name].groups) do
+			if timber.groups[group] then return node end
+	 end
    return nil
 end
 
 
-function timber.just_dig_above(pos, node, drop, count, finally, continue)
+function timber.just_dig_above(pos, node, drop, count, finally, on_wait, continue)
    local height = nil
    local function have_height(height)
 	  -- be sure to dig down, avoid floating trees
@@ -162,7 +172,7 @@ function timber.just_dig_above(pos, node, drop, count, finally, continue)
 		 if i < 0 then
 			return continue(height)
 		 end
-		 maybe_count(count,finally,function()
+		 maybe_count(count,finally,on_wait, function()
 						local np = {x=pos.x,y=pos.y+i,z=pos.z}
 						timber.dig_node(np,node,drop)
 						iterate(i-1)
@@ -183,17 +193,38 @@ function timber.just_dig_above(pos, node, drop, count, finally, continue)
    return have_height(timber.max_height)
 end
 
-function timber.dig_above(pos, node, finally)
-   local count = counter()
+function timber.dig_above(pos, node, digger, finally)
+	 local axe = digger:get_wielded_item()
+	 if axe == nil then return end
+	 local n = axe:get_name()
+	 if not (
+			string.match(n,"[^%a]axe[^%a]") or
+			string.match(n,"[^%a]axe$") or
+			string.match(n,"^axe[^%a]")
+	 ) then return end
+	 -- though the names only use pick,
+	 -- be sure not to match pickaxe, just in case
+	 
+   local count = counter(axe:get_wear())
+	 print("axe starts with",count)
+	 local function update_wear()
+			print("axe now has",count.left)
+			axe:set_wear(count.left)
+			return finally()
+	 end
    local function have_height(height)
 	  -- be sure to dig down, avoid floating trees
 	  local function iterate(i)
 		 local np = {x=pos.x,y=pos.y+i,z=pos.z}
 		 timber.dig_around(np, node, pos, count,
-						   finally,
+							 update_wear,
+							 function()
+									print("waiting, so axe now has",count.left)
+									axe:set_wear(count.left)
+							 end,
 						   function()
 							  if i <= timber.start then
-								 return finally()
+								 return update_wear()
 							  end
 							  return iterate(i-1)
 		 end)		 
@@ -201,12 +232,12 @@ function timber.dig_above(pos, node, finally)
 
 	  return iterate(height)
    end
-   timber.just_dig_above(pos,node,pos,count,finally,have_height)
+   timber.just_dig_above(pos,node,pos,count,finally,on_wait, have_height)
 end
 
-minetest.register_on_dignode(function(pos,node)
+minetest.register_on_dignode(function(pos, node, digger)
 	  if not timber.want_this(node) then return end
-	  timber.dig_above(pos,node,function()
+	  timber.dig_above(pos,node,digger,function()
 						  print("timber!")
 	  end)
 end)

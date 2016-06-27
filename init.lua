@@ -25,7 +25,7 @@ local timber = {
    -- how far to search for suspended trunks
    limit = 10000,
    -- hard limit to how many blocks to remove in one chop before giving up
-   wait = 100,
+   wait = 10,
    -- how many blocks to chop before waiting
    start = -1,
    -- how far up to go before searching around (0 = current level)
@@ -34,6 +34,8 @@ local timber = {
    max_height = 50,
    -- how far up to follow the trunk before giving up
    -- (giant sequoia never gets above 50 blocks high)
+	 max_recursion = 2,
+	 -- don't wander more than 2 hops away from the main trunk
 }
 
 timber.nodes = set {"default:papyrus", "default:cactus"}
@@ -41,115 +43,120 @@ timber.groups = {
    tree=true
 }
 
-function timber.dig_node(np,node, drop)
-   core.remove_node(np)
-   for _, item in ipairs(minetest.get_node_drops(node.name)) do
-	  core.add_item(drop, item)
-   end
-end
-
-local function counter(durability)
-   return {
-	  left = durability,
-	  full = 0,
-	  current = 0
-   }
-end
-
-local currently_digging = 0
-
-local function maybe_count(count,finally,on_wait,continue)
-	 if count.left <= 0 then
-			return finally()
+local function augment(handlers,updated)
+	 local res = {}
+	 for n,v in pairs(handlers) do
+			if updated[n] then
+				 v = updated[n]
+			end
+			res[n] = v
 	 end
-	 count.left = count.left - 1
-   if count.full > timber.limit then
-	  return finally()
-   end
-   count.full = count.full + 1
-   if currently_digging > timber.wait then
-	  print('derp',currently_digging)
-		on_wait()
-	  core.after(timber.delay,function()
-					print('derp resume')
-					currently_digging = 0
-					continue()
-	  end)
-   else
-	  currently_digging = currently_digging + 1
-	  continue()
-   end
+	 return res
 end
 
+local function continue(handlers,f)
+	 return augment(handlers,{continue=f})
+end
+local function finally(handlers,f)
+	 return augment(handlers,{finally=f})
+end
+local function counter(wear)
+	 local left = 65536 - wear
+	 local full = 0
+	 local current = 0
+	 local currently_digging = 0
+	 local level = 0
+	 
+   return {
+			next = function()
+				 left = left - 1
+				 if left <= 0 then
+						error("tool ran out")
+				 end
+				 full = full + 1
+				 if full > timber.limit then
+						error("hard limit to trunk digging")
+				 end
 
-function timber.dig_around(center, node, drop, count, finally, on_wait, continue)
-   maybe_count(count, finally, on_wait,
-	function()
-	   local downright = {x=center.x-timber.search,
-						 y=center.y,
-						 z=center.z-timber.search}
-	   -- NOT timber.search below center.y though.
-	   local topleft = {x=center.x+timber.search,
-						 y=center.y+timber.search,
-						 z=center.z+timber.search}
-	   local nps = core.find_nodes_in_area(downright, topleft, node.name)
-	   -- get tall stuff first... more like shaving than cutting down :/
-	   table.sort(nps,function(a,b) return a.y > b.y end)
-	   local function one_iteration(i)
-		  if i > #nps then
-			 -- we dug all successfully, so can continue on
-			 return continue()
-		  end
-		  local np = nps[i]
-		  local function doit()
-			 maybe_count(count, finally, on_wait, 
-						 function()
-							timber.dig_around(
-							   np, node, drop, count,
-							   finally,
-								 on_wait,
-							   function()
-								  one_iteration(i+1)
-							end)
-			 end)
-		  end
-		  if np == nil then
-			 print("uhhhhh",i,#nps)
-			 assert(false)
-		  end
-		  local below = minetest.get_node_or_nil({x=np.x,
-												  y=np.y-1,
-												  z=np.z})
-		  print("eh?",below,below==nil or below.name)
-		  if below == nil then
-			 doit()
-		  else
-			 local ndef = minetest.registered_nodes[below.name]
-			 if not ndef.walkable or ndef.groups.leaves or ndef.groups.leafdecay then
-				doit()
-			 end
-		  end
-	   end
-	   local function breadth_first(i)
-		  if i > #nps then
-			 return one_iteration(1)
-		  end
-		  timber.just_dig_above(nps[i],
-								node,
-								drop,
-								count,
-								finally,
-								on_wait,
-						   function()
-							  maybe_count(count, finally, on_wait, 
-										  function()
-											 breadth_first(i+1,count)
-							  end)
-						   end)
-	   end
+				 if currently_digging > timber.wait then
+						coroutine.yield()
+						currently_digging = 0
+				 else
+						currently_digging = currently_digging + 1
+				 end
+			end,
+			broaden = function()
+				 level = level + 1
+				 return level > timber.max_recursion
+			end,
+			narrow = function()
+				 level = level - 1
+			end
+	 }
+end
 
-	   breadth_first(1)
-   end)
+-- see dig_around.svg
+function timber.dig_around(center, node, digger, count)
+	 -- don't go too deep into recursion
+	 -- return false if we hit recursion limit, nothing to do
+	 -- with whether our trunk was dug or not.
+	 if not count.broaden(): return false
+	 
+	 local downright = {x=center.x-timber.search,
+											y=center.y, 
+											z=center.z-timber.search}
+	 -- NOT timber.search below center.y though.
+	 local topleft = {x=center.x+timber.search,
+										y=center.y+timber.search,
+										z=center.z+timber.search}
+	 local nps = core.find_nodes_in_area(downright, topleft, node.name)
+	 -- get tall stuff first...
+	 table.sort(nps,function(a,b) return a.y > b.y end)
+	 -- this algorithm is more like shaving than cutting down :/
+	 -- might leave dangling trunks if your axe breaks, but oh well
+
+	 for subpos,subnode in pairs(nps) do
+			if not timber.dig_around(subpos, subnode, digger, count) then
+				 count.narrow()
+				 return true
+			end
+	 end
+	 -- now delete ourself... if we're not sitting on something solid/notleafy.
+	 local below = minetest.get_node_or_nil({x=np.x,
+																					 y=np.y-1,
+																					 z=np.z})
+	 if below ~= nil then
+			local ndef = core.registered_nodes[below.name]
+			if (not ndef.walkable
+					or ndef.groups.leaves
+					or ndef.groups.leafdecay) then
+				 core.node_dig(np,node,digger)
+			end
+	 end
+	 count.narrow()
+	 return true
+end
+
+	 
+	 local function breadth_first(i)
+			if i > #nps then
+				 return one_iteration(1)
+			end
+			timber.just_dig_above(nps[i],
+														node,
+														digger,
+														count,
+														continue(handlers,
+															 function()
+																	NEXT(count,
+																			 function()
+																					breadth_first(i+1,count)
+																	end)
+														end))
+	 end
+
+	 breadth_first(1)
+   end))
 end
 
 function timber.want_this(node)
@@ -164,36 +171,35 @@ function timber.want_this(node)
 end
 
 
-function timber.just_dig_above(pos, node, drop, count, finally, on_wait, continue)
-   local height = nil
-   local function have_height(height)
-	  -- be sure to dig down, avoid floating trees
-	  local function iterate(i)
-		 if i < 0 then
-			return continue(height)
-		 end
-		 maybe_count(count,finally,on_wait, function()
-						local np = {x=pos.x,y=pos.y+i,z=pos.z}
-						timber.dig_node(np,node,drop)
-						iterate(i-1)
-		 end)
-	  end
-	  return iterate(height)
-   end
-   -- check up first, to find what to dig
+function basic_dig_above(pos, node, digger, count)
+	 -- check up first, to find where to start above
    for height = 1,timber.max_height do
 	  local np = {x=pos.x,y=pos.y+height,z=pos.z}
 	  local test = core.get_node_or_nil(np)
-	  if test == nil then return have_height(height-1) end
-	  if node.name ~= test.name then
-		 return have_height(height-1)
-	  end
+	  if test ~= nil and node.name == test.name then
+			 break
+		end
    end
-   -- even giant sequoias only get up to ~40
-   return have_height(timber.max_height)
+
+	 -- now dig straight up as a priority, then check around where you dug
+	 -- always (really) dig downward
+	 local np = {x=pos.x,y=pos.y+height,z=pos.z}
+				
+	 for i = height,0,-1 do
+			count.next()
+			core.node_dig(np, node, digger) -- builtin/game/item.lua
+			np.y = np.y - 1
+   end
+	 np.y = np.y + height
+
+	 -- now go down, digging around
+	 for i = height,timber.start,-1 do
+			dig_around(np, node, digger, count)
+			np.y = np.y - 1
+	 end
 end
 
-function timber.dig_above(pos, node, digger, finally)
+function timber.dig_above(pos, node, digger)
 	 local axe = digger:get_wielded_item()
 	 if axe == nil then return end
 	 local n = axe:get_name()
@@ -202,42 +208,27 @@ function timber.dig_above(pos, node, digger, finally)
 			string.match(n,"[^%a]axe$") or
 			string.match(n,"^axe[^%a]")
 	 ) then return end
-	 -- though the names only use pick,
 	 -- be sure not to match pickaxe, just in case
-	 
-   local count = counter(axe:get_wear())
-	 print("axe starts with",count)
-	 local function update_wear()
-			print("axe now has",count.left)
-			axe:set_wear(count.left)
-			return finally()
-	 end
-   local function have_height(height)
-	  -- be sure to dig down, avoid floating trees
-	  local function iterate(i)
-		 local np = {x=pos.x,y=pos.y+i,z=pos.z}
-		 timber.dig_around(np, node, pos, count,
-							 update_wear,
-							 function()
-									print("waiting, so axe now has",count.left)
-									axe:set_wear(count.left)
-							 end,
-						   function()
-							  if i <= timber.start then
-								 return update_wear()
-							  end
-							  return iterate(i-1)
-		 end)		 
-	  end
+	 -- though the pickaxe names only use "pick"
 
-	  return iterate(height)
-   end
-   timber.just_dig_above(pos,node,pos,count,finally,on_wait, have_height)
+   count = counter(axe:get_wear())
+	 return basic_dig_above(pos,node,digger,count)
 end
 
 minetest.register_on_dignode(function(pos, node, digger)
 	  if not timber.want_this(node) then return end
-	  timber.dig_above(pos,node,digger,function()
-						  print("timber!")
-	  end)
+	  local coro = coroutine.create(function()
+					timber.dig_above(pos,node,digger)
+					print("timber!")
+		end)
+		local function resume()
+			 local ok, delay = coro.resume()
+			 if ok then
+					if delay == nil then delay = 3 end
+					minetest.after(delay, resume)
+			 else
+					print("error",delay)
+			 end
+		end
+		resume()
 end)

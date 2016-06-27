@@ -13,13 +13,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ]]
 
-function set(list)
-   local s = {}
-   for _,l in ipairs(list) do s[l] = true end
-   return s
-end
-
--- this mod is based on http://minetest.net/forum/viewtopic.php?id=1590
+-- this mod is vaguely inspired by http://minetest.net/forum/viewtopic.php?id=1590
 local timber = {
    search = 4,
    -- how far to search for suspended trunks
@@ -37,6 +31,12 @@ local timber = {
 	 max_recursion = 2,
 	 -- don't wander more than 2 hops away from the main trunk
 }
+
+function set(list)
+   local s = {}
+   for _,l in ipairs(list) do s[l] = true end
+   return s
+end
 
 timber.nodes = set {"default:papyrus", "default:cactus"}
 timber.groups = {
@@ -100,7 +100,9 @@ function timber.dig_around(center, node, digger, count)
 	 -- don't go too deep into recursion
 	 -- return false if we hit recursion limit, nothing to do
 	 -- with whether our trunk was dug or not.
-	 if not count.broaden(): return false
+	 -- remember dig_around will NEVER hop to trunks lower than us
+	 -- only basic_dig_above will iterate down to the trunk bottom
+	 if not count.broaden() then return false end
 	 
 	 local downright = {x=center.x-timber.search,
 											y=center.y, 
@@ -122,7 +124,7 @@ function timber.dig_around(center, node, digger, count)
 			end
 	 end
 	 -- now delete ourself... if we're not sitting on something solid/notleafy.
-	 local below = minetest.get_node_or_nil({x=np.x,
+	 local below = core.get_node_or_nil({x=np.x,
 																					 y=np.y-1,
 																					 z=np.z})
 	 if below ~= nil then
@@ -137,28 +139,6 @@ function timber.dig_around(center, node, digger, count)
 	 return true
 end
 
-	 
-	 local function breadth_first(i)
-			if i > #nps then
-				 return one_iteration(1)
-			end
-			timber.just_dig_above(nps[i],
-														node,
-														digger,
-														count,
-														continue(handlers,
-															 function()
-																	NEXT(count,
-																			 function()
-																					breadth_first(i+1,count)
-																	end)
-														end))
-	 end
-
-	 breadth_first(1)
-   end))
-end
-
 function timber.want_this(node)
    if timber.nodes[node.name] then return node end
 	 if not core.registered_nodes[node.name] then
@@ -170,9 +150,9 @@ function timber.want_this(node)
    return nil
 end
 
-
 function basic_dig_above(pos, node, digger, count)
 	 -- check up first, to find where to start above
+	 local height = 0
    for height = 1,timber.max_height do
 	  local np = {x=pos.x,y=pos.y+height,z=pos.z}
 	  local test = core.get_node_or_nil(np)
@@ -194,7 +174,7 @@ function basic_dig_above(pos, node, digger, count)
 
 	 -- now go down, digging around
 	 for i = height,timber.start,-1 do
-			dig_around(np, node, digger, count)
+			timber.dig_around(np, node, digger, count)
 			np.y = np.y - 1
 	 end
 end
@@ -215,18 +195,24 @@ function timber.dig_above(pos, node, digger)
 	 return basic_dig_above(pos,node,digger,count)
 end
 
-minetest.register_on_dignode(function(pos, node, digger)
+local already_doing = false
+
+core.register_on_dignode(function(pos, node, digger)
+			if already_doing then return end
+			already_doing = true
+			-- core.node_dig then calls the core.register_on_dignode functions...
 	  if not timber.want_this(node) then return end
 	  local coro = coroutine.create(function()
 					timber.dig_above(pos,node,digger)
 					print("timber!")
 		end)
 		local function resume()
-			 local ok, delay = coro.resume()
+			 local ok, delay = coroutine.resume(coro)
 			 if ok then
 					if delay == nil then delay = 3 end
-					minetest.after(delay, resume)
+					core.after(delay, resume)
 			 else
+					already_doing = false;
 					print("error",delay)
 			 end
 		end

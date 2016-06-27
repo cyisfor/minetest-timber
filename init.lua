@@ -71,7 +71,10 @@ local function counter(wear, cost, digger)
 				 end
 
 				 if currently_digging > timber.wait then
-						coroutine.yield()
+						if not coroutine.yield() then
+							 -- or lua will sit on a dead coroutine forever
+							 error("bailing out")
+						end
 						currently_digging = 0
 				 else
 						currently_digging = currently_digging + 1
@@ -191,29 +194,19 @@ function basic_dig_above(pos, node, digger, count)
 	 end
 end
 
-function timber.dig_above(pos, node, digger)
-	 local axe = digger:get_wielded_item()
-	 if axe == nil then return end
-	 local n = axe:get_name()
-	 if not (
-			string.match(n,"[^%a]axe[^%a]") or
-			string.match(n,"[^%a]axe$") or
-			string.match(n,"^axe[^%a]")
-	 ) then return end
-	 -- be sure not to match pickaxe, just in case
-	 -- though the pickaxe names only use "pick"
-
+function timber.dig_above(pos, node, digger, axe)
 	 local wear = nil
 	 local wdef = axe:get_definition()
 	 -- make sure it's not a special tool that doesn't have simple wear
+	 -- we have to check EVERY TIME if it is :p
 	 if not wdef or not wdef.after_use then
 			local tp = axe:get_tool_capabilities()
 			local dp = core.get_dig_params(node.def.groups, tp)
 			wear = dp.wear
-			-- we have to check EVERY TIME if it is :p
+			assert(wear ~= nil)
 	 end
 	 
-	 return basic_dig_above(pos,node,digger,counter(axe:get_wear(), wear))
+	 return basic_dig_above(pos,node,digger,counter(axe:get_wear(), wear, digger))
 end
 
 
@@ -225,22 +218,53 @@ core.register_on_dignode(function(pos, node, digger)
 			local ndef = timber.want_this(node)
 			if not ndef then return end
 			node.def = ndef -- HAX
-	  local coro = coroutine.create(function()
-					timber.dig_above(pos,node,digger)
-					print("timber!")
-		end)
-		local function resume()
-			 local ok, delay = coroutine.resume(coro)
-			 if ok then
-					if delay == nil then delay = 3 end
-					core.after(delay, resume)
-			 else
-					if delay == "cannot resume dead coroutine" then
-						 -- ok
-					else
-						 print("error",delay)
-					end
-			 end
-		end
-		resume()
+
+			-- remember this, so we can check if it's legit after yielding
+			local axe = digger:get_wielded_item()
+			
+			if axe == nil then return end
+			local axe_name = axe:get_name()
+			if not (
+				 string.match(axe_name,"[^%a]axe[^%a]") or
+						string.match(axe_name,"[^%a]axe$") or
+						string.match(axe_name,"^axe[^%a]")
+			) then return end
+			-- be sure not to match pickaxe, just in case
+			-- though the pickaxe names only use "pick"
+
+			local oldpos = digger:getpos()
+
+			local coro = coroutine.create(function()
+						timber.dig_above(pos,node,digger,axe)
+						print("timber!")
+			end)
+			local function resume()
+				 local test = digger:get_wielded_item()
+				 if (
+						-- if the axe broke, or we dropped it, or w/ev
+						((not test) or axe_name ~= test:get_name())
+						-- if we died
+						or (digger:get_hp() == 0)
+						-- disconnected
+						or (digger:is_player() and not digger:is_player_connected())
+						-- we walked away
+						or (vector.distance(digger:getpos(),oldpos) > 10)
+						) then
+						coroutine.resume(coro,false) -- bail out
+						return
+				 end
+
+				 local ok, delay = coroutine.resume(coro,true)
+				 if ok then
+						if delay == nil then delay = 3 end
+						core.after(delay, resume)
+				 else
+						if delay == "cannot resume dead coroutine" then
+							 -- ok
+						else
+							 print("error",delay)
+						end
+				 end
+			end
+			resume()
 end)

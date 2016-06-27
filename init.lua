@@ -28,8 +28,8 @@ local timber = {
    max_height = 50,
    -- how far up to follow the trunk before giving up
    -- (giant sequoia never gets above 50 blocks high)
-	 max_recursion = 2,
-	 -- don't wander more than 2 hops away from the main trunk
+	 max_recursion = 4,
+	 -- don't wander more than this many hops away from the main trunk
 }
 
 function set(list)
@@ -43,7 +43,7 @@ timber.groups = {
    tree=true
 }
 
-local function counter(wear)
+local function counter(wear, cost, digger)
 	 local left = 65536 - wear
 	 local full = 0
 	 local current = 0
@@ -52,12 +52,21 @@ local function counter(wear)
 
    return {
 			next = function()
-				 left = left - 1
-				 if left <= 0 then
-						error("tool ran out")
+				 if cost == nil then
+						local item = digger:get_wielded_item()
+						if item:get_definition() then
+							 error("after_drop destroyed the wielded item")
+						end
+				 else
+						left = left - cost
+						if left <= 0 then
+							 print('BOING')
+							 error("tool ran out")
+						end
 				 end
 				 full = full + 1
 				 if full > timber.limit then
+						print('DOING')
 						error("hard limit to trunk digging")
 				 end
 
@@ -81,16 +90,6 @@ end
 
 -- see dig_around.svg
 function timber.dig_around(center, node, digger, count)
-	 -- don't go too deep into recursion
-	 -- return false if we hit recursion limit, nothing to do
-	 -- with whether our trunk was dug or not.
-	 -- remember dig_around will NEVER hop to trunks lower than us
-	 -- only basic_dig_above will iterate down to the trunk bottom
-	 if not count.broaden() then
-			count.narrow()
-			return false
-	 end
-
 	 local downright = {x=center.x-timber.search,
 											y=center.y,
 											z=center.z-timber.search}
@@ -105,6 +104,7 @@ function timber.dig_around(center, node, digger, count)
 								 return vector.distance(a,center) < vector.distance(b,center)
 	 end)
 	 print('uhhh',#nps)
+	 print(nps[1],nps[2],nps[3])
 	 -- this algorithm is more like shaving than cutting down :/
 	 -- might leave dangling trunks if your axe breaks, but oh well
 
@@ -116,41 +116,46 @@ function timber.dig_around(center, node, digger, count)
 			print('below',below == nil)
 			if below ~= nil then
 				 if below.name == 'air' then
+						print('air')
 						count.next()
 						core.node_dig(subpos,node,digger)
 				 else
-						local ndef = core.registered_nodes[below.name]
+						print('nair')
+						below.def = core.registered_nodes[below.name]
 						-- if they're not sitting on something solid/notleafy.
-						if ((not ndef.walkable)
-									or ndef.airlike
-									or ndef.groups.leaves
-							 or ndef.groups.leafdecay) then
+						if ((not below.def.walkable)
+									or below.def.airlike
+									or below.def.groups.leaves
+							 or below.def.groups.leafdecay) then
 							 count.next()
 							 core.node_dig(subpos,node,digger)
 						end
 				 end
 			end
-
-			if not timber.dig_around(subpos, node, digger, count) then
-				 count.narrow()
-				 return false
-			end
-
 	 end
-
-	 count.narrow()
-	 return true
+	 -- don't dig around, until we've got this batch done
+	 for _,subpos in ipairs(nps) do
+			-- don't go too deep into recursion
+			-- return false if we hit recursion limit, nothing to do
+			-- with whether our trunk was dug or not.
+			-- remember dig_around will NEVER hop to trunks lower than us
+			-- only basic_dig_above will iterate down to the trunk bottom
+			if count.broaden() then
+				 basic_dig_above(subpos, node, digger, count)
+			end
+			count.narrow()
+	 end
 end
 
 function timber.want_this(node)
-   if timber.nodes[node.name] then return true end
-	 if not core.registered_nodes[node.name] then
-			return false
+	 local ndef = core.registered_nodes[node.name]
+	 if not ndef then
+			return nil
 	 end
-	 for group,_ in pairs(core.registered_nodes[node.name].groups) do
-			if timber.groups[group] then return true end
+	 if timber.nodes[node.name] then return ndef end
+	 for group,_ in pairs(ndef.groups) do
+			if timber.groups[group] then return ndef end
 	 end
-   return nil
 end
 
 function basic_dig_above(pos, node, digger, count)
@@ -198,7 +203,17 @@ function timber.dig_above(pos, node, digger)
 	 -- be sure not to match pickaxe, just in case
 	 -- though the pickaxe names only use "pick"
 
-	 return basic_dig_above(pos,node,digger,counter(axe:get_wear()))
+	 local wear = nil
+	 local wdef = axe:get_definition()
+	 -- make sure it's not a special tool that doesn't have simple wear
+	 if not wdef or not wdef.after_use then
+			local tp = axe:get_tool_capabilities()
+			local dp = core.get_dig_params(node.def.groups, tp)
+			wear = dp.wear
+			-- we have to check EVERY TIME if it is :p
+	 end
+	 
+	 return basic_dig_above(pos,node,digger,counter(axe:get_wear(), wear))
 end
 
 
@@ -206,12 +221,13 @@ local maincoro = coroutine.running()
 core.register_on_dignode(function(pos, node, digger)
 			-- core.node_dig then calls the core.register_on_dignode functions...
 			if coroutine.running() ~= maincoro then return end
-
-	  if not timber.want_this(node) then return end
+			print('in the main coro!')
+			local ndef = timber.want_this(node)
+			if not ndef then return end
+			node.def = ndef -- HAX
 	  local coro = coroutine.create(function()
 					timber.dig_above(pos,node,digger)
 					print("timber!")
-					already_doing = false
 		end)
 		local function resume()
 			 local ok, delay = coroutine.resume(coro)
@@ -219,7 +235,6 @@ core.register_on_dignode(function(pos, node, digger)
 					if delay == nil then delay = 3 end
 					core.after(delay, resume)
 			 else
-					already_doing = false;
 					if delay == "cannot resume dead coroutine" then
 						 -- ok
 					else

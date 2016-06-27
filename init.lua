@@ -19,12 +19,12 @@ local timber = {
    -- how far to search for suspended trunks
    limit = 10000,
    -- hard limit to how many blocks to remove in one chop before giving up
-   wait = 10,
+   wait = 50,
    -- how many blocks to chop before waiting
-   start = -1,
-   -- how far up to go before searching around (0 = current level)
    delay = 1,
    -- how long to wait until felling more trees
+   start = -1,
+   -- how far up to go before searching around (0 = current level)
    max_height = 50,
    -- how far up to follow the trunk before giving up
    -- (giant sequoia never gets above 50 blocks high)
@@ -43,23 +43,6 @@ timber.groups = {
    tree=true
 }
 
-local function augment(handlers,updated)
-	 local res = {}
-	 for n,v in pairs(handlers) do
-			if updated[n] then
-				 v = updated[n]
-			end
-			res[n] = v
-	 end
-	 return res
-end
-
-local function continue(handlers,f)
-	 return augment(handlers,{continue=f})
-end
-local function finally(handlers,f)
-	 return augment(handlers,{finally=f})
-end
 local function counter(wear)
 	 local left = 65536 - wear
 	 local full = 0
@@ -111,13 +94,17 @@ function timber.dig_around(center, node, digger, count)
 	 local downright = {x=center.x-timber.search,
 											y=center.y,
 											z=center.z-timber.search}
-	 -- NOT timber.search below center.y though.
+	 -- do NOT search below center.y though.
 	 local topleft = {x=center.x+timber.search,
 										y=center.y+timber.search,
 										z=center.z+timber.search}
 	 local nps = core.find_nodes_in_area(downright, topleft, node.name)
-	 -- get tall stuff first...
-	 table.sort(nps,function(a,b) return a.y > b.y end)
+	 print("found",#nps,"nearby")
+	 -- get distant stuff first...
+	 table.sort(nps,function(a,b)
+								 return vector.distance(a,center) < vector.distance(b,center)
+	 end)
+	 print('uhhh',#nps)
 	 -- this algorithm is more like shaving than cutting down :/
 	 -- might leave dangling trunks if your axe breaks, but oh well
 
@@ -126,14 +113,21 @@ function timber.dig_around(center, node, digger, count)
 			local below = core.get_node_or_nil({x=center.x,
 																					y=center.y-1,
 																					z=center.z})
+			print('below',below == nil)
 			if below ~= nil then
-				 local ndef = core.registered_nodes[below.name]
-				 -- if they're not sitting on something solid/notleafy.
-				 if (not ndef.walkable
-								or ndef.groups.leaves
-						 or ndef.groups.leafdecay) then
+				 if below.name == 'air' then
 						count.next()
 						core.node_dig(subpos,node,digger)
+				 else
+						local ndef = core.registered_nodes[below.name]
+						-- if they're not sitting on something solid/notleafy.
+						if ((not ndef.walkable)
+									or ndef.airlike
+									or ndef.groups.leaves
+							 or ndef.groups.leafdecay) then
+							 count.next()
+							 core.node_dig(subpos,node,digger)
+						end
 				 end
 			end
 
@@ -207,17 +201,17 @@ function timber.dig_above(pos, node, digger)
 	 return basic_dig_above(pos,node,digger,counter(axe:get_wear()))
 end
 
--- keep this non-reentrant stuff from getting reentered
-local already_doing = false
 
+local maincoro = coroutine.running()
 core.register_on_dignode(function(pos, node, digger)
-			if already_doing then return end
-			already_doing = true
 			-- core.node_dig then calls the core.register_on_dignode functions...
+			if coroutine.running() ~= maincoro then return end
+
 	  if not timber.want_this(node) then return end
 	  local coro = coroutine.create(function()
 					timber.dig_above(pos,node,digger)
 					print("timber!")
+					already_doing = false
 		end)
 		local function resume()
 			 local ok, delay = coroutine.resume(coro)

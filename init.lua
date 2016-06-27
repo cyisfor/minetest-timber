@@ -66,7 +66,7 @@ local function counter(wear)
 	 local current = 0
 	 local currently_digging = 0
 	 local level = 0
-	 
+
    return {
 			next = function()
 				 left = left - 1
@@ -87,7 +87,8 @@ local function counter(wear)
 			end,
 			broaden = function()
 				 level = level + 1
-				 return level > timber.max_recursion
+				 print("going to level",level,timber.max_recursion)
+				 return level < timber.max_recursion
 			end,
 			narrow = function()
 				 level = level - 1
@@ -96,94 +97,102 @@ local function counter(wear)
 end
 
 -- see dig_around.svg
-function timber.dig_around(center, node_name, digger, count)
+function timber.dig_around(center, node, digger, count)
 	 -- don't go too deep into recursion
 	 -- return false if we hit recursion limit, nothing to do
 	 -- with whether our trunk was dug or not.
 	 -- remember dig_around will NEVER hop to trunks lower than us
 	 -- only basic_dig_above will iterate down to the trunk bottom
-	 if not count.broaden() then return false end
-	 
+	 if not count.broaden() then
+			count.narrow()
+			return false
+	 end
+
 	 local downright = {x=center.x-timber.search,
-											y=center.y, 
+											y=center.y,
 											z=center.z-timber.search}
 	 -- NOT timber.search below center.y though.
 	 local topleft = {x=center.x+timber.search,
 										y=center.y+timber.search,
 										z=center.z+timber.search}
-	 local nps = core.find_nodes_in_area(downright, topleft, node_name)
+	 local nps = core.find_nodes_in_area(downright, topleft, node.name)
 	 -- get tall stuff first...
 	 table.sort(nps,function(a,b) return a.y > b.y end)
 	 -- this algorithm is more like shaving than cutting down :/
 	 -- might leave dangling trunks if your axe breaks, but oh well
 
 	 for _,subpos in ipairs(nps) do
-			if not timber.dig_around(subpos, node_name, digger, count) then
+			-- delete subnodes, because we already deleted the parentmost node
+			local below = core.get_node_or_nil({x=center.x,
+																					y=center.y-1,
+																					z=center.z})
+			if below ~= nil then
+				 local ndef = core.registered_nodes[below.name]
+				 -- if they're not sitting on something solid/notleafy.
+				 if (not ndef.walkable
+								or ndef.groups.leaves
+						 or ndef.groups.leafdecay) then
+						count.next()
+						core.node_dig(subpos,node,digger)
+				 end
+			end
+
+			if not timber.dig_around(subpos, node, digger, count) then
 				 count.narrow()
-				 return true
+				 return false
 			end
+
 	 end
-	 -- now delete ourself... if we're not sitting on something solid/notleafy.
-	 local below = core.get_node_or_nil({x=np.x,
-																					 y=np.y-1,
-																					 z=np.z})
-	 if below ~= nil then
-			local ndef = core.registered_nodes[below.name]
-			if (not ndef.walkable
-					or ndef.groups.leaves
-					or ndef.groups.leafdecay) then
-				 core.node_dig(np,node_name,digger)
-			end
-	 end
+
 	 count.narrow()
 	 return true
 end
 
-function timber.want_this(node_name)
-   if timber.nodes[node_name] then return true end
-	 if not core.registered_nodes[node_name] then
+function timber.want_this(node)
+   if timber.nodes[node.name] then return true end
+	 if not core.registered_nodes[node.name] then
 			return false
 	 end
-	 for group,_ in pairs(core.registered_nodes[node_name].groups) do
+	 for group,_ in pairs(core.registered_nodes[node.name].groups) do
 			if timber.groups[group] then return true end
 	 end
    return nil
 end
 
-function basic_dig_above(pos, node_name, digger, count)
+function basic_dig_above(pos, node, digger, count)
 	 -- check up first, to find where to start above
 	 local height
    for i = 1,timber.max_height do
 			height = i
 			local np = {x=pos.x,y=pos.y+i,z=pos.z}
 			local test = core.get_node_or_nil(np)
-			if test == nil or node_name ~= test.name then
-				 -- past the top of `node_name` trunks
+			if test == nil or node.name ~= test.name then
+				 -- past the top of `node.name` trunks
 				 break
 			end
    end
 
 	 print("found height",height)
 
-	 -- now dig straight up as a priority, then check around where you dug
+	 -- now dig straight above as a priority, then check around where you dug
 	 -- always (really) dig downward
 	 local np = {x=pos.x,y=pos.y+height,z=pos.z}
-				
+
 	 for i = height,0,-1 do
 			count.next()
-			core.node_dig(np, node_name, digger) -- builtin/game/item.lua
+			core.node_dig(np, node, digger) -- builtin/game/item.lua
 			np.y = np.y - 1
    end
 	 np.y = np.y + height
 
 	 -- now go down, digging around
 	 for i = height,timber.start,-1 do
-			timber.dig_around(np, node_name, digger, count)
+			timber.dig_around(np, node, digger, count)
 			np.y = np.y - 1
 	 end
 end
 
-function timber.dig_above(pos, node_name, digger)
+function timber.dig_above(pos, node, digger)
 	 local axe = digger:get_wielded_item()
 	 if axe == nil then return end
 	 local n = axe:get_name()
@@ -195,7 +204,7 @@ function timber.dig_above(pos, node_name, digger)
 	 -- be sure not to match pickaxe, just in case
 	 -- though the pickaxe names only use "pick"
 
-	 return basic_dig_above(pos,node_name,digger,counter(axe:get_wear()))
+	 return basic_dig_above(pos,node,digger,counter(axe:get_wear()))
 end
 
 -- keep this non-reentrant stuff from getting reentered
@@ -205,9 +214,9 @@ core.register_on_dignode(function(pos, node, digger)
 			if already_doing then return end
 			already_doing = true
 			-- core.node_dig then calls the core.register_on_dignode functions...
-	  if not timber.want_this(node.name) then return end
+	  if not timber.want_this(node) then return end
 	  local coro = coroutine.create(function()
-					timber.dig_above(pos,node.name,digger)
+					timber.dig_above(pos,node,digger)
 					print("timber!")
 		end)
 		local function resume()

@@ -28,7 +28,7 @@ local timber = {
    max_height = 50,
    -- how far up to follow the trunk before giving up
    -- (giant sequoia never gets above 50 blocks high)
-	 max_recursion = 4,
+	 max_recursion = 3,
 	 -- don't wander more than this many hops away from the main trunk
 }
 
@@ -44,7 +44,7 @@ timber.groups = {
 }
 
 local function counter(wear, cost, digger)
-	 local left = 65536 - wear
+	 local left = 0xFFFF - wear
 	 local full = 0
 	 local current = 0
 	 local currently_digging = 0
@@ -59,14 +59,12 @@ local function counter(wear, cost, digger)
 						end
 				 else
 						left = left - cost
-						if left <= 0 then
-							 print('BOING')
+						if left < 0 then
 							 error("tool ran out")
 						end
 				 end
 				 full = full + 1
 				 if full > timber.limit then
-						print('DOING')
 						error("hard limit to trunk digging")
 				 end
 
@@ -82,7 +80,6 @@ local function counter(wear, cost, digger)
 			end,
 			broaden = function()
 				 level = level + 1
-				 print("going to level",level,timber.max_recursion)
 				 return level < timber.max_recursion
 			end,
 			narrow = function()
@@ -101,13 +98,10 @@ function timber.dig_around(center, node, digger, count)
 										y=center.y+timber.search,
 										z=center.z+timber.search}
 	 local nps = core.find_nodes_in_area(downright, topleft, node.name)
-	 print("found",#nps,"nearby")
 	 -- get distant stuff first...
 	 table.sort(nps,function(a,b)
 								 return vector.distance(a,center) < vector.distance(b,center)
 	 end)
-	 print('uhhh',#nps)
-	 print(nps[1],nps[2],nps[3])
 	 -- this algorithm is more like shaving than cutting down :/
 	 -- might leave dangling trunks if your axe breaks, but oh well
 
@@ -116,14 +110,11 @@ function timber.dig_around(center, node, digger, count)
 			local below = core.get_node_or_nil({x=center.x,
 																					y=center.y-1,
 																					z=center.z})
-			print('below',below == nil)
 			if below ~= nil then
 				 if below.name == 'air' then
-						print('air')
 						count.next()
 						core.node_dig(subpos,node,digger)
 				 else
-						print('nair')
 						below.def = core.registered_nodes[below.name]
 						-- if they're not sitting on something solid/notleafy.
 						if ((not below.def.walkable)
@@ -144,6 +135,8 @@ function timber.dig_around(center, node, digger, count)
 			-- remember dig_around will NEVER hop to trunks lower than us
 			-- only basic_dig_above will iterate down to the trunk bottom
 			if count.broaden() then
+				 -- recurse back into basic_dig_above so we can jump
+				 -- gaps in trunks, like with sequoias
 				 basic_dig_above(subpos, node, digger, count)
 			end
 			count.narrow()
@@ -174,7 +167,7 @@ function basic_dig_above(pos, node, digger, count)
 			end
    end
 
-	 print("found height",height)
+	 -- print("found height",height)
 
 	 -- now dig straight above as a priority, then check around where you dug
 	 -- always (really) dig downward
@@ -214,7 +207,6 @@ local maincoro = coroutine.running()
 core.register_on_dignode(function(pos, node, digger)
 			-- core.node_dig then calls the core.register_on_dignode functions...
 			if coroutine.running() ~= maincoro then return end
-			print('in the main coro!')
 			local ndef = timber.want_this(node)
 			if not ndef then return end
 			node.def = ndef -- HAX
